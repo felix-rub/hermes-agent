@@ -65,3 +65,6 @@ ENV HERMES_HOME=/opt/data
 ENV PATH="/opt/data/.local/bin:${PATH}"
 RUN mkdir -p /opt/data
 ENTRYPOINT [ "/usr/bin/tini", "-g", "--", "/opt/hermes/docker/entrypoint.sh" ]
+# Default: keep container alive (entrypoint will exec sleep if it finds it on PATH).
+# HERMES_DASHBOARD=1 starts the web UI as a background process before the sleep.
+CMD ["sleep", "infinity"]
