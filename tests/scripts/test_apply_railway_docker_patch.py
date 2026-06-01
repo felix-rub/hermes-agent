@@ -5,6 +5,7 @@ from pathlib import Path
 
 
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "apply_railway_docker_patch.py"
+REPO_ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location("apply_railway_docker_patch", SCRIPT)
 assert spec is not None
 module = importlib.util.module_from_spec(spec)
@@ -77,3 +78,12 @@ def test_apply_railway_patch_migrates_legacy_sleep_block(tmp_path: Path) -> None
     assert "sleep infinity" not in patched
     assert 'CMD ["sleep", "infinity"]' not in patched
     assert 'CMD ["sh", "-c", "exec hermes dashboard --host 0.0.0.0 --port ${PORT:-9119} --no-open --insecure"]' in patched
+
+
+def test_repository_dockerfile_has_railway_dashboard_contract() -> None:
+    dockerfile = REPO_ROOT / "Dockerfile"
+    text = dockerfile.read_text(encoding="utf-8")
+
+    assert 'VOLUME [ "/opt/data" ]' not in text
+    assert 'CMD ["sleep", "infinity"]' not in text
+    assert 'CMD ["sh", "-c", "exec hermes dashboard --host 0.0.0.0 --port ${PORT:-9119} --no-open --insecure"]' in text
