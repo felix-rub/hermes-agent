@@ -37,12 +37,15 @@ def test_apply_railway_patch_removes_volume_and_sets_dashboard_cmd(
     patched = dockerfile.read_text(encoding="utf-8")
 
     assert 'VOLUME [ "/opt/data" ]' not in patched
-    assert 'ENV HERMES_DASHBOARD=1' in patched
-    assert 'ENV HERMES_DASHBOARD_HOST=0.0.0.0' in patched
-    assert 'ENV HERMES_DASHBOARD_PORT=9119' in patched
-    assert 'ENV HERMES_DASHBOARD_INSECURE=1' in patched
-    assert 'CMD ["sleep", "infinity"]' in patched
-    assert "Railway serves the s6-supervised dashboard on port 9119" in patched
+    assert "ENV HERMES_DASHBOARD=1" in patched
+    assert "ENV HERMES_DASHBOARD_HOST=0.0.0.0" in patched
+    assert "ENV HERMES_DASHBOARD_PORT=9119" in patched
+    assert "ENV HERMES_DASHBOARD_INSECURE=1" in patched
+    assert (
+        'CMD ["sh", "-c", "exec hermes dashboard --host 0.0.0.0 --port ${PORT:-9119} --no-open --insecure"]'
+        in patched
+    )
+    assert "foreground dashboard on PORT" in patched
 
 
 def test_apply_railway_patch_is_idempotent(tmp_path: Path) -> None:
@@ -54,17 +57,17 @@ def test_apply_railway_patch_is_idempotent(tmp_path: Path) -> None:
                 "RUN mkdir -p /opt/data",
                 "ENV HERMES_HOME=/opt/data",
                 "",
-                "# Railway's public domain is wired to target port 9119. Let the upstream",
-                "# s6-supervised dashboard own that port and keep the container's main process",
-                "# as a simple lifetime keeper.",
+                "# Railway currently probes the injected PORT for healthchecks, while the",
+                "# existing public service domain targets 9119. Run the upstream s6 dashboard on",
+                "# 9119 and the foreground dashboard on PORT so both paths serve HTTP.",
                 "ENV HERMES_DASHBOARD=1",
                 "ENV HERMES_DASHBOARD_HOST=0.0.0.0",
                 "ENV HERMES_DASHBOARD_PORT=9119",
                 "ENV HERMES_DASHBOARD_INSECURE=1",
                 "",
-                "# Railway serves the s6-supervised dashboard on port 9119. Keep the main",
-                "# program alive so /init does not enter shutdown while s6 services run.",
-                'CMD ["sleep", "infinity"]',
+                "# Railway injects PORT at runtime for healthchecks. The s6 dashboard above keeps",
+                "# the existing public domain's target port (9119) reachable.",
+                'CMD ["sh", "-c", "exec hermes dashboard --host 0.0.0.0 --port ${PORT:-9119} --no-open --insecure"]',
                 "",
             ]
         ),
@@ -93,9 +96,12 @@ def test_apply_railway_patch_migrates_legacy_sleep_block(tmp_path: Path) -> None
     assert module.apply_railway_patch(dockerfile) is True
     patched = dockerfile.read_text(encoding="utf-8")
 
-    assert "sleep infinity" not in patched
-    assert 'CMD ["sleep", "infinity"]' in patched
-    assert 'ENV HERMES_DASHBOARD_INSECURE=1' in patched
+    assert 'CMD ["sleep", "infinity"]' not in patched
+    assert (
+        'CMD ["sh", "-c", "exec hermes dashboard --host 0.0.0.0 --port ${PORT:-9119} --no-open --insecure"]'
+        in patched
+    )
+    assert "ENV HERMES_DASHBOARD_INSECURE=1" in patched
 
 
 def test_repository_dockerfile_has_railway_dashboard_contract() -> None:
@@ -103,11 +109,14 @@ def test_repository_dockerfile_has_railway_dashboard_contract() -> None:
     text = dockerfile.read_text(encoding="utf-8")
 
     assert 'VOLUME [ "/opt/data" ]' not in text
-    assert 'ENV HERMES_DASHBOARD=1' in text
-    assert 'ENV HERMES_DASHBOARD_HOST=0.0.0.0' in text
-    assert 'ENV HERMES_DASHBOARD_PORT=9119' in text
-    assert 'ENV HERMES_DASHBOARD_INSECURE=1' in text
-    assert 'CMD ["sleep", "infinity"]' in text
+    assert "ENV HERMES_DASHBOARD=1" in text
+    assert "ENV HERMES_DASHBOARD_HOST=0.0.0.0" in text
+    assert "ENV HERMES_DASHBOARD_PORT=9119" in text
+    assert "ENV HERMES_DASHBOARD_INSECURE=1" in text
+    assert (
+        'CMD ["sh", "-c", "exec hermes dashboard --host 0.0.0.0 --port ${PORT:-9119} --no-open --insecure"]'
+        in text
+    )
 
 
 def test_railway_config_forces_dashboard_deploy_contract() -> None:
@@ -121,4 +130,6 @@ def test_railway_config_forces_dashboard_deploy_contract() -> None:
 
     start_command = config["deploy"]["startCommand"]
     assert "/init /opt/hermes/docker/main-wrapper.sh" in start_command
-    assert "sleep infinity" in start_command
+    assert "hermes dashboard" in start_command
+    assert "--port ${PORT:-9119}" in start_command
+    assert "--no-open --insecure" in start_command

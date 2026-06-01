@@ -7,7 +7,7 @@ small Railway-specific runtime contract:
 
 * do not declare /opt/data as a Docker VOLUME (Railway volume handling differs)
 * run the s6-supervised dashboard on Railway's public target port 9119
-* keep the container's main process alive while s6 services serve traffic
+* run the foreground dashboard on Railway's injected PORT for healthchecks
 """
 
 from __future__ import annotations
@@ -17,11 +17,10 @@ import re
 import sys
 from pathlib import Path
 
-
 RAILWAY_ENV_COMMENT = (
-    "# Railway's public domain is wired to target port 9119. Let the upstream\n"
-    "# s6-supervised dashboard own that port and keep the container's main process\n"
-    "# as a simple lifetime keeper.\n"
+    "# Railway currently probes the injected PORT for healthchecks, while the\n"
+    "# existing public service domain targets 9119. Run the upstream s6 dashboard on\n"
+    "# 9119 and the foreground dashboard on PORT so both paths serve HTTP.\n"
 )
 RAILWAY_ENV_BLOCK = (
     f"{RAILWAY_ENV_COMMENT}"
@@ -31,10 +30,13 @@ RAILWAY_ENV_BLOCK = (
     "ENV HERMES_DASHBOARD_INSECURE=1\n"
 )
 RAILWAY_COMMENT = (
-    "# Railway serves the s6-supervised dashboard on port 9119. Keep the main\n"
-    "# program alive so /init does not enter shutdown while s6 services run.\n"
+    "# Railway injects PORT at runtime for healthchecks. The s6 dashboard above keeps\n"
+    "# the existing public domain's target port (9119) reachable.\n"
 )
-RAILWAY_CMD = 'CMD ["sleep", "infinity"]'
+RAILWAY_CMD = (
+    'CMD ["sh", "-c", '
+    '"exec hermes dashboard --host 0.0.0.0 --port ${PORT:-9119} --no-open --insecure"]'
+)
 RAILWAY_BLOCK = f"{RAILWAY_COMMENT}{RAILWAY_CMD}\n"
 
 LEGACY_RAILWAY_COMMENT = (
@@ -146,7 +148,9 @@ def main(argv: list[str] | None = None) -> int:
 
     changed = apply_railway_patch(args.dockerfile)
     if args.check and changed:
-        print(f"error: {args.dockerfile} required Railway patch changes", file=sys.stderr)
+        print(
+            f"error: {args.dockerfile} required Railway patch changes", file=sys.stderr
+        )
         return 1
 
     print("updated" if changed else "already patched")

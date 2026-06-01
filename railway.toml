@@ -4,9 +4,9 @@ dockerfilePath = "Dockerfile"
 
 [deploy]
 # Keep the runtime command in code so Railway dashboard-level overrides cannot
-# accidentally deploy a container whose main process exits. The dashboard itself
-# is owned by the Dockerfile's s6 service and listens on Railway target port 9119.
-startCommand = "/init /opt/hermes/docker/main-wrapper.sh sleep infinity"
+# accidentally deploy a container with no listener on Railway's injected PORT.
+# The Dockerfile's s6 dashboard also serves the existing public target port 9119.
+startCommand = "/init /opt/hermes/docker/main-wrapper.sh sh -c \"exec hermes dashboard --host 0.0.0.0 --port ${PORT:-9119} --no-open --insecure\""
 healthcheckPath = "/api/status"
 healthcheckTimeout = 300
 restartPolicyType = "ON_FAILURE"

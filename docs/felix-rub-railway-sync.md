@@ -23,25 +23,28 @@ Compared with upstream, this fork intentionally keeps two Dockerfile behaviors:
 
 1. No Docker-managed anonymous volume for `/opt/data`:
    - remove `VOLUME [ "/opt/data" ]`
-2. A supervised dashboard that listens on Railway's service domain target port
-   `9119`:
+2. Two dashboard listeners for Railway's split routing behavior:
    - `HERMES_DASHBOARD=1`
    - `HERMES_DASHBOARD_HOST=0.0.0.0`
    - `HERMES_DASHBOARD_PORT=9119`
    - `HERMES_DASHBOARD_INSECURE=1`
-   - `CMD ["sleep", "infinity"]` keeps `/init` alive while s6 services run
+   - the s6-supervised dashboard serves the existing public service-domain
+      target port `9119`
+   - the foreground `CMD` dashboard serves Railway's injected `$PORT` for
+      `/api/status` healthchecks
 
 The current upstream Docker image uses `s6-overlay`. Railway's generated domain
-for this service targets port `9119`; using Railway's runtime `$PORT` caused the
-main dashboard process to bind `8080` while the public route still proxied to
-`9119`, resulting in `502 Bad Gateway`. The fork therefore lets the upstream
-s6 dashboard service own `9119` and uses `sleep infinity` only as the container
-main-process lifetime keeper.
+for this service targets port `9119`, while Railway healthchecks probe the
+injected runtime `$PORT` (observed as `8080`). Running only the foreground
+dashboard on `$PORT` made healthchecks pass but left the public route on `9119`
+returning `502 Bad Gateway`; running only the s6 dashboard on `9119` fixed the
+public route but failed Railway healthchecks. The fork therefore serves both
+ports: s6 dashboard on `9119`, foreground dashboard on `$PORT`.
 
 `railway.toml` is part of the same contract. It forces Railway to build via the
-root `Dockerfile`, keeps the main process alive with the same lifetime keeper,
-probes `/api/status`, and restarts on failure. This keeps Railway from reporting
-a deploy as "running" when no HTTP dashboard is actually reachable.
+root `Dockerfile`, keeps the main foreground dashboard command on `$PORT`, probes
+`/api/status`, and restarts on failure. This keeps Railway from reporting a
+deploy as "running" when no HTTP dashboard is actually reachable.
 
 ## Automation
 
@@ -97,7 +100,7 @@ Expected after a successful sync:
 - the Railway patch check prints `already patched`
 - `git diff --check` exits successfully
 - `railway.toml` keeps `builder = "DOCKERFILE"`, `/api/status` healthchecks, and
-   the lifetime-keeper start command
+   the foreground dashboard start command on `${PORT:-9119}`
 - `origin/main...upstream/main` shows `0` on the upstream-behind side, unless
   upstream published new commits after the last sync
 
@@ -127,8 +130,8 @@ python scripts/apply_railway_docker_patch.py Dockerfile
 git diff -- Dockerfile
 ```
 
-If the diff is only the expected `/opt/data` volume removal and Railway dashboard
-`CMD`, commit it.
+If the diff is only the expected `/opt/data` volume removal, Railway dashboard
+environment variables, and Railway dashboard `CMD`, commit it.
 
 ### Railway deploy breaks after upstream Docker changes
 
@@ -143,4 +146,5 @@ contract is expressed as a small, repeatable patch.
   deliberate product decision.
 - Do not use force-push for upstream syncs.
 - Do not replace upstream Docker architecture wholesale; patch only the Railway
-   deployment contract: no Docker `VOLUME`, dashboard listens on `$PORT`.
+   deployment contract: no Docker `VOLUME`, s6 dashboard on `9119`, foreground
+   dashboard on `$PORT`.
