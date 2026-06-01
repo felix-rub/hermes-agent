@@ -247,6 +247,16 @@ COPY --chmod=0755 docker/cont-init.d/02-reconcile-profiles /etc/cont-init.d/02-r
 ENV HERMES_WEB_DIST=/opt/hermes/hermes_cli/web_dist
 ENV HERMES_HOME=/opt/data
 
+# Railway's public domain is wired to target port 9119. Let the upstream
+# s6-supervised dashboard own that port and keep the container's main process
+# as a simple lifetime keeper.
+ENV HERMES_DASHBOARD=1
+ENV HERMES_DASHBOARD_HOST=0.0.0.0
+ENV HERMES_DASHBOARD_PORT=9119
+ENV HERMES_DASHBOARD_INSECURE=1
+
+
+
 # `docker exec` privilege-drop shim. When operators run
 # `docker exec <c> hermes ...` they default to root, and any file the
 # command writes under $HERMES_HOME (auth.json, .env, config.yaml) ends
@@ -297,6 +307,6 @@ RUN mkdir -p /opt/data
 # exit code. Without the wrapper-as-ENTRYPOINT, leading-dash args
 # like `--version` would be intercepted by /init's POSIX shell.
 ENTRYPOINT [ "/init", "/opt/hermes/docker/main-wrapper.sh" ]
-# Railway serves the dashboard from the container's main process and injects
-# PORT at runtime. Use sh -c so ${PORT:-9119} is expanded after deployment.
-CMD ["sh", "-c", "exec hermes dashboard --host 0.0.0.0 --port ${PORT:-9119} --no-open --insecure"]
+# Railway serves the s6-supervised dashboard on port 9119. Keep the main
+# program alive so /init does not enter shutdown while s6 services run.
+CMD ["sleep", "infinity"]

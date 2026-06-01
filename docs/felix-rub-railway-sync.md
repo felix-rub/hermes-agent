@@ -23,19 +23,25 @@ Compared with upstream, this fork intentionally keeps two Dockerfile behaviors:
 
 1. No Docker-managed anonymous volume for `/opt/data`:
    - remove `VOLUME [ "/opt/data" ]`
-2. A dashboard process that listens on Railway's runtime `$PORT`:
-   - enforce `CMD ["sh", "-c", "exec hermes dashboard --host 0.0.0.0 --port ${PORT:-9119} --no-open --insecure"]`
+2. A supervised dashboard that listens on Railway's service domain target port
+   `9119`:
+   - `HERMES_DASHBOARD=1`
+   - `HERMES_DASHBOARD_HOST=0.0.0.0`
+   - `HERMES_DASHBOARD_PORT=9119`
+   - `HERMES_DASHBOARD_INSECURE=1`
+   - `CMD ["sleep", "infinity"]` keeps `/init` alive while s6 services run
 
-The current upstream Docker image uses `s6-overlay`. The Railway keepalive `CMD`
-was replaced with a foreground dashboard command after the s6 migration because
-`sleep infinity` keeps the container alive but does not provide an HTTP listener,
-which causes Railway to return `502 Bad Gateway`.
+The current upstream Docker image uses `s6-overlay`. Railway's generated domain
+for this service targets port `9119`; using Railway's runtime `$PORT` caused the
+main dashboard process to bind `8080` while the public route still proxied to
+`9119`, resulting in `502 Bad Gateway`. The fork therefore lets the upstream
+s6 dashboard service own `9119` and uses `sleep infinity` only as the container
+main-process lifetime keeper.
 
 `railway.toml` is part of the same contract. It forces Railway to build via the
-root `Dockerfile`, overrides any dashboard-level Start Command with the same
-dashboard runtime command, probes `/api/status`, and restarts on failure. This
-keeps Railway from reporting a deploy as "running" when no HTTP dashboard is
-actually reachable.
+root `Dockerfile`, keeps the main process alive with the same lifetime keeper,
+probes `/api/status`, and restarts on failure. This keeps Railway from reporting
+a deploy as "running" when no HTTP dashboard is actually reachable.
 
 ## Automation
 
@@ -91,7 +97,7 @@ Expected after a successful sync:
 - the Railway patch check prints `already patched`
 - `git diff --check` exits successfully
 - `railway.toml` keeps `builder = "DOCKERFILE"`, `/api/status` healthchecks, and
-   the dashboard start command on `${PORT:-9119}`
+   the lifetime-keeper start command
 - `origin/main...upstream/main` shows `0` on the upstream-behind side, unless
   upstream published new commits after the last sync
 

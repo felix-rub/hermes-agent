@@ -6,7 +6,8 @@ scheduled syncs should take upstream's Docker architecture and re-apply only the
 small Railway-specific runtime contract:
 
 * do not declare /opt/data as a Docker VOLUME (Railway volume handling differs)
-* run the dashboard as the container's main process on Railway's PORT
+* run the s6-supervised dashboard on Railway's public target port 9119
+* keep the container's main process alive while s6 services serve traffic
 """
 
 from __future__ import annotations
@@ -17,14 +18,23 @@ import sys
 from pathlib import Path
 
 
+RAILWAY_ENV_COMMENT = (
+    "# Railway's public domain is wired to target port 9119. Let the upstream\n"
+    "# s6-supervised dashboard own that port and keep the container's main process\n"
+    "# as a simple lifetime keeper.\n"
+)
+RAILWAY_ENV_BLOCK = (
+    f"{RAILWAY_ENV_COMMENT}"
+    "ENV HERMES_DASHBOARD=1\n"
+    "ENV HERMES_DASHBOARD_HOST=0.0.0.0\n"
+    "ENV HERMES_DASHBOARD_PORT=9119\n"
+    "ENV HERMES_DASHBOARD_INSECURE=1\n"
+)
 RAILWAY_COMMENT = (
-    "# Railway serves the dashboard from the container's main process and injects\n"
-    "# PORT at runtime. Use sh -c so ${PORT:-9119} is expanded after deployment.\n"
+    "# Railway serves the s6-supervised dashboard on port 9119. Keep the main\n"
+    "# program alive so /init does not enter shutdown while s6 services run.\n"
 )
-RAILWAY_CMD = (
-    'CMD ["sh", "-c", '
-    '"exec hermes dashboard --host 0.0.0.0 --port ${PORT:-9119} --no-open --insecure"]'
-)
+RAILWAY_CMD = 'CMD ["sleep", "infinity"]'
 RAILWAY_BLOCK = f"{RAILWAY_COMMENT}{RAILWAY_CMD}\n"
 
 LEGACY_RAILWAY_COMMENT = (
@@ -32,6 +42,14 @@ LEGACY_RAILWAY_COMMENT = (
     "# alive while s6-supervised services start and run in the background.\n"
 )
 LEGACY_RAILWAY_CMD = 'CMD ["sleep", "infinity"]'
+LEGACY_DASHBOARD_COMMENT = (
+    "# Railway serves the dashboard from the container's main process and injects\n"
+    "# PORT at runtime. Use sh -c so ${PORT:-9119} is expanded after deployment.\n"
+)
+LEGACY_DASHBOARD_CMD = (
+    'CMD ["sh", "-c", '
+    '"exec hermes dashboard --host 0.0.0.0 --port ${PORT:-9119} --no-open --insecure"]'
+)
 
 
 def apply_railway_patch(dockerfile: Path) -> bool:
@@ -57,6 +75,7 @@ def apply_railway_patch(dockerfile: Path) -> bool:
     for managed_comment, managed_cmd in (
         (RAILWAY_COMMENT, RAILWAY_CMD),
         (LEGACY_RAILWAY_COMMENT, LEGACY_RAILWAY_CMD),
+        (LEGACY_DASHBOARD_COMMENT, LEGACY_DASHBOARD_CMD),
     ):
         escaped_comment = re.escape(managed_comment)
         escaped_cmd = re.escape(managed_cmd)
@@ -65,6 +84,23 @@ def apply_railway_patch(dockerfile: Path) -> bool:
             "",
             text,
         )
+
+    text = re.sub(
+        rf"(?m){re.escape(RAILWAY_ENV_COMMENT)}"
+        r"ENV HERMES_DASHBOARD=1\r?\n"
+        r"ENV HERMES_DASHBOARD_HOST=0\.0\.0\.0\r?\n"
+        r"ENV HERMES_DASHBOARD_PORT=9119\r?\n"
+        r"ENV HERMES_DASHBOARD_INSECURE=1\r?\n",
+        "",
+        text,
+    )
+
+    home_env = "ENV HERMES_HOME=/opt/data\n"
+    if home_env in text:
+        text = text.replace(home_env, f"{home_env}\n{RAILWAY_ENV_BLOCK}", 1)
+        text = text.replace(f"{RAILWAY_ENV_BLOCK}\n\n", f"{RAILWAY_ENV_BLOCK}\n", 1)
+    else:
+        text = f"{RAILWAY_ENV_BLOCK}\n{text}"
 
     cmd_matches = list(re.finditer(r"(?m)^CMD\s+.*$", text))
     if cmd_matches:
