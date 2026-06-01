@@ -6,8 +6,7 @@ scheduled syncs should take upstream's Docker architecture and re-apply only the
 small Railway-specific runtime contract:
 
 * do not declare /opt/data as a Docker VOLUME (Railway volume handling differs)
-* keep the container's main process alive with sleep infinity while supervised
-  services run in the background
+* run the dashboard as the container's main process on Railway's PORT
 """
 
 from __future__ import annotations
@@ -19,11 +18,20 @@ from pathlib import Path
 
 
 RAILWAY_COMMENT = (
+    "# Railway serves the dashboard from the container's main process and injects\n"
+    "# PORT at runtime. Use sh -c so ${PORT:-9119} is expanded after deployment.\n"
+)
+RAILWAY_CMD = (
+    'CMD ["sh", "-c", '
+    '"exec hermes dashboard --host 0.0.0.0 --port ${PORT:-9119} --no-open --insecure"]'
+)
+RAILWAY_BLOCK = f"{RAILWAY_COMMENT}{RAILWAY_CMD}\n"
+
+LEGACY_RAILWAY_COMMENT = (
     "# Railway deploys the container as a long-running service; keep the main process\n"
     "# alive while s6-supervised services start and run in the background.\n"
 )
-RAILWAY_CMD = 'CMD ["sleep", "infinity"]'
-RAILWAY_BLOCK = f"{RAILWAY_COMMENT}{RAILWAY_CMD}\n"
+LEGACY_RAILWAY_CMD = 'CMD ["sleep", "infinity"]'
 
 
 def apply_railway_patch(dockerfile: Path) -> bool:
@@ -44,14 +52,19 @@ def apply_railway_patch(dockerfile: Path) -> bool:
     )
 
     # Remove any older copy of our managed block before inserting the canonical
-    # version. This keeps the script idempotent across repeated sync runs.
-    escaped_comment = re.escape(RAILWAY_COMMENT)
-    escaped_cmd = re.escape(RAILWAY_CMD)
-    text = re.sub(
-        rf"(?m){escaped_comment}{escaped_cmd}\s*\r?\n",
-        "",
-        text,
-    )
+    # version. This keeps the script idempotent across repeated sync runs and
+    # cleanly migrates the previous sleep-infinity keepalive block.
+    for managed_comment, managed_cmd in (
+        (RAILWAY_COMMENT, RAILWAY_CMD),
+        (LEGACY_RAILWAY_COMMENT, LEGACY_RAILWAY_CMD),
+    ):
+        escaped_comment = re.escape(managed_comment)
+        escaped_cmd = re.escape(managed_cmd)
+        text = re.sub(
+            rf"(?m){escaped_comment}{escaped_cmd}\s*\r?\n",
+            "",
+            text,
+        )
 
     cmd_matches = list(re.finditer(r"(?m)^CMD\s+.*$", text))
     if cmd_matches:

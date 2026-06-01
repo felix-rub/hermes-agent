@@ -297,6 +297,6 @@ RUN mkdir -p /opt/data
 # exit code. Without the wrapper-as-ENTRYPOINT, leading-dash args
 # like `--version` would be intercepted by /init's POSIX shell.
 ENTRYPOINT [ "/init", "/opt/hermes/docker/main-wrapper.sh" ]
-# Railway deploys the container as a long-running service; keep the main process
-# alive while s6-supervised services start and run in the background.
-CMD ["sleep", "infinity"]
+# Railway serves the dashboard from the container's main process and injects
+# PORT at runtime. Use sh -c so ${PORT:-9119} is expanded after deployment.
+CMD ["sh", "-c", "exec hermes dashboard --host 0.0.0.0 --port ${PORT:-9119} --no-open --insecure"]

@@ -23,12 +23,13 @@ Compared with upstream, this fork intentionally keeps two Dockerfile behaviors:
 
 1. No Docker-managed anonymous volume for `/opt/data`:
    - remove `VOLUME [ "/opt/data" ]`
-2. A long-running default process for Railway:
-   - enforce `CMD ["sleep", "infinity"]`
+2. A dashboard process that listens on Railway's runtime `$PORT`:
+   - enforce `CMD ["sh", "-c", "exec hermes dashboard --host 0.0.0.0 --port ${PORT:-9119} --no-open --insecure"]`
 
 The current upstream Docker image uses `s6-overlay`. The Railway keepalive `CMD`
-works with that setup because supervised services can run while the container's
-main process stays alive.
+was replaced with a foreground dashboard command after the s6 migration because
+`sleep infinity` keeps the container alive but does not provide an HTTP listener,
+which causes Railway to return `502 Bad Gateway`.
 
 ## Automation
 
@@ -111,8 +112,8 @@ python scripts/apply_railway_docker_patch.py Dockerfile
 git diff -- Dockerfile
 ```
 
-If the diff is only the expected `/opt/data` volume removal and keepalive `CMD`,
-commit it.
+If the diff is only the expected `/opt/data` volume removal and Railway dashboard
+`CMD`, commit it.
 
 ### Railway deploy breaks after upstream Docker changes
 
@@ -127,4 +128,4 @@ contract is expressed as a small, repeatable patch.
   deliberate product decision.
 - Do not use force-push for upstream syncs.
 - Do not replace upstream Docker architecture wholesale; patch only the Railway
-  deployment contract.
+   deployment contract: no Docker `VOLUME`, dashboard listens on `$PORT`.

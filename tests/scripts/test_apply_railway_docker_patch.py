@@ -12,7 +12,7 @@ assert spec.loader is not None
 spec.loader.exec_module(module)
 
 
-def test_apply_railway_patch_removes_volume_and_sets_keepalive_cmd(tmp_path: Path) -> None:
+def test_apply_railway_patch_removes_volume_and_sets_dashboard_cmd(tmp_path: Path) -> None:
     dockerfile = tmp_path / "Dockerfile"
     dockerfile.write_text(
         '\n'.join(
@@ -32,11 +32,30 @@ def test_apply_railway_patch_removes_volume_and_sets_keepalive_cmd(tmp_path: Pat
     patched = dockerfile.read_text(encoding="utf-8")
 
     assert 'VOLUME [ "/opt/data" ]' not in patched
-    assert 'CMD ["sleep", "infinity"]' in patched
-    assert "Railway deploys the container as a long-running service" in patched
+    assert 'CMD ["sh", "-c", "exec hermes dashboard --host 0.0.0.0 --port ${PORT:-9119} --no-open --insecure"]' in patched
+    assert "Railway serves the dashboard from the container's main process" in patched
 
 
 def test_apply_railway_patch_is_idempotent(tmp_path: Path) -> None:
+    dockerfile = tmp_path / "Dockerfile"
+    dockerfile.write_text(
+        '\n'.join(
+            [
+                'FROM debian:13.4',
+                'RUN mkdir -p /opt/data',
+                "# Railway serves the dashboard from the container's main process and injects",
+                '# PORT at runtime. Use sh -c so ${PORT:-9119} is expanded after deployment.',
+                'CMD ["sh", "-c", "exec hermes dashboard --host 0.0.0.0 --port ${PORT:-9119} --no-open --insecure"]',
+                '',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.apply_railway_patch(dockerfile) is False
+
+
+def test_apply_railway_patch_migrates_legacy_sleep_block(tmp_path: Path) -> None:
     dockerfile = tmp_path / "Dockerfile"
     dockerfile.write_text(
         '\n'.join(
@@ -52,4 +71,9 @@ def test_apply_railway_patch_is_idempotent(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    assert module.apply_railway_patch(dockerfile) is False
+    assert module.apply_railway_patch(dockerfile) is True
+    patched = dockerfile.read_text(encoding="utf-8")
+
+    assert "sleep infinity" not in patched
+    assert 'CMD ["sleep", "infinity"]' not in patched
+    assert 'CMD ["sh", "-c", "exec hermes dashboard --host 0.0.0.0 --port ${PORT:-9119} --no-open --insecure"]' in patched
