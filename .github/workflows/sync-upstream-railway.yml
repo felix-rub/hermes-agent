@@ -1,0 +1,88 @@
+name: Sync upstream and preserve Railway
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Daily, off the top of the hour to avoid crowded GitHub cron windows.
+    - cron: "23 4 * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-upstream-railway-main
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.repository == 'felix-rub/hermes-agent'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout fork main
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git author
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch upstream
+        run: |
+          set -euo pipefail
+          git remote add upstream https://github.com/NousResearch/hermes-agent.git
+          git fetch upstream main
+
+      - name: Merge upstream and re-apply Railway Docker contract
+        run: |
+          set -euo pipefail
+
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "Already contains upstream/main. Checking Railway Docker contract only."
+          else
+            set +e
+            git merge --no-ff upstream/main -m "Merge upstream NousResearch/main into felix-rub main"
+            merge_status=$?
+            set -e
+
+            if [ "$merge_status" -ne 0 ]; then
+              mapfile -t conflicts < <(git diff --name-only --diff-filter=U)
+              printf 'Conflicted files:\n%s\n' "${conflicts[*]:-none}"
+              if [ "${#conflicts[@]}" -ne 1 ] || [ "${conflicts[0]}" != "Dockerfile" ]; then
+                echo "::error::Upstream sync has non-Dockerfile conflicts; refusing automated resolution."
+                git status --short
+                exit 1
+              fi
+
+              # Take upstream's Dockerfile architecture, then re-apply only the
+              # felix-rub Railway runtime contract below.
+              git checkout --theirs Dockerfile
+              python3 scripts/apply_railway_docker_patch.py Dockerfile
+              git add Dockerfile
+              git commit --no-edit
+            fi
+          fi
+
+          python3 scripts/apply_railway_docker_patch.py Dockerfile
+          if ! git diff --quiet -- Dockerfile; then
+            git add Dockerfile
+            git commit -m "fix(docker): preserve Railway runtime after upstream sync"
+          fi
+
+      - name: Validate sync result
+        run: |
+          set -euo pipefail
+          python3 scripts/apply_railway_docker_patch.py --check Dockerfile
+          git diff --check
+          git log --oneline --decorate -5
+
+      - name: Push updated main
+        run: |
+          set -euo pipefail
+          if git diff --quiet origin/main..HEAD; then
+            echo "No new commits to push."
+          else
+            git push origin HEAD:main
+          fi
