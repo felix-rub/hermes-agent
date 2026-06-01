@@ -31,11 +31,18 @@ was replaced with a foreground dashboard command after the s6 migration because
 `sleep infinity` keeps the container alive but does not provide an HTTP listener,
 which causes Railway to return `502 Bad Gateway`.
 
+`railway.toml` is part of the same contract. It forces Railway to build via the
+root `Dockerfile`, overrides any dashboard-level Start Command with the same
+dashboard runtime command, probes `/api/status`, and restarts on failure. This
+keeps Railway from reporting a deploy as "running" when no HTTP dashboard is
+actually reachable.
+
 ## Automation
 
 Automation lives in:
 
 - `.github/workflows/sync-upstream-railway.yml`
+- `railway.toml`
 - `scripts/apply_railway_docker_patch.py`
 - `tests/scripts/test_apply_railway_docker_patch.py`
 
@@ -83,6 +90,8 @@ Expected after a successful sync:
 
 - the Railway patch check prints `already patched`
 - `git diff --check` exits successfully
+- `railway.toml` keeps `builder = "DOCKERFILE"`, `/api/status` healthchecks, and
+   the dashboard start command on `${PORT:-9119}`
 - `origin/main...upstream/main` shows `0` on the upstream-behind side, unless
   upstream published new commits after the last sync
 

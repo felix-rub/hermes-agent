@@ -1,0 +1,13 @@
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+# Keep the runtime command in code so Railway dashboard-level overrides cannot
+# accidentally deploy a running container with no HTTP listener.
+# Railway expands PORT at runtime; /init keeps the upstream s6 setup hooks.
+startCommand = "/init /opt/hermes/docker/main-wrapper.sh sh -c \"exec hermes dashboard --host 0.0.0.0 --port ${PORT:-9119} --no-open --insecure\""
+healthcheckPath = "/api/status"
+healthcheckTimeout = 300
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10

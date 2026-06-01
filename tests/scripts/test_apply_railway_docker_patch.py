@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import tomllib
 from pathlib import Path
 
 
@@ -87,3 +88,20 @@ def test_repository_dockerfile_has_railway_dashboard_contract() -> None:
     assert 'VOLUME [ "/opt/data" ]' not in text
     assert 'CMD ["sleep", "infinity"]' not in text
     assert 'CMD ["sh", "-c", "exec hermes dashboard --host 0.0.0.0 --port ${PORT:-9119} --no-open --insecure"]' in text
+
+
+def test_railway_config_forces_dashboard_deploy_contract() -> None:
+    config = tomllib.loads((REPO_ROOT / "railway.toml").read_text(encoding="utf-8"))
+
+    assert config["build"]["builder"] == "DOCKERFILE"
+    assert config["build"]["dockerfilePath"] == "Dockerfile"
+    assert config["deploy"]["healthcheckPath"] == "/api/status"
+    assert config["deploy"]["healthcheckTimeout"] >= 300
+    assert config["deploy"]["restartPolicyType"] == "ON_FAILURE"
+
+    start_command = config["deploy"]["startCommand"]
+    assert "/init /opt/hermes/docker/main-wrapper.sh" in start_command
+    assert "hermes dashboard" in start_command
+    assert "--host 0.0.0.0" in start_command
+    assert "--port ${PORT:-9119}" in start_command
+    assert "--no-open --insecure" in start_command
