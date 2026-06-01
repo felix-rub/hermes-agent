@@ -1,5 +1,8 @@
 name: Sync upstream and preserve Railway
 
+# Fork-specific operations guide:
+# docs/felix-rub-railway-sync.md
+
 on:
   workflow_dispatch:
   schedule:
