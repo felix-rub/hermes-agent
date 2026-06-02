@@ -106,6 +106,14 @@ def reconcile_profile_gateways(
     )
     default_prior_state = legacy_default_state or _read_prior_state(hermes_home)
     default_should_start = default_prior_state in _AUTOSTART_STATES
+
+    # Allow deployments to force gateway auto-start regardless of
+    # persisted state. Handles the case where the gateway gracefully
+    # shuts down on SIGTERM (writing "stopped") before the container is
+    # replaced during a platform redeploy (Railway, Fly, etc.).
+    if os.environ.get("HERMES_GATEWAY_AUTOSTART", "").lower() in ("1", "true", "yes"):
+        default_should_start = True
+
     if not dry_run:
         _cleanup_stale_runtime_files(hermes_home)
         _register_service(scandir, "default", start=default_should_start)
