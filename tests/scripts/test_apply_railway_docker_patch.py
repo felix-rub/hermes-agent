@@ -124,6 +124,7 @@ def test_railway_config_forces_dashboard_deploy_contract() -> None:
 
     assert config["build"]["builder"] == "DOCKERFILE"
     assert config["build"]["dockerfilePath"] == "Dockerfile"
+    assert config["build"]["watchPatterns"] == ["railway-deploy.trigger"]
     assert config["deploy"]["healthcheckPath"] == "/api/status"
     assert config["deploy"]["healthcheckTimeout"] >= 300
     assert config["deploy"]["restartPolicyType"] == "ON_FAILURE"

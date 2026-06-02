@@ -1,6 +1,11 @@
 [build]
 builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
+# Railway production auto-deploy is intentionally gated. This fork tracks a
+# fast-moving public upstream, so normal upstream-sync pushes must not deploy
+# production. To promote a reviewed commit, update railway-deploy.trigger in
+# the same commit (or deploy explicitly with `railway up`).
+watchPatterns = ["railway-deploy.trigger"]
 
 [deploy]
 # Keep the runtime command in code so Railway dashboard-level overrides cannot

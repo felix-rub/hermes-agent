@@ -4,6 +4,44 @@ This fork deploys directly to Railway and must stay close to
 `NousResearch/hermes-agent` while preserving the small Docker runtime changes
 Railway needs.
 
+## Production auto-deploy gate
+
+This fork tracks a fast-moving public upstream, but the Railway production
+service needs fork-specific deployment invariants:
+
+- no Docker `VOLUME ["/opt/data"]` declaration;
+- dashboard auth bypass for the public Railway bind via `--insecure`;
+- a listener on Railway's injected `$PORT` for healthchecks;
+- a listener on the existing public domain target port `9119`.
+
+Do not let normal upstream-sync pushes deploy production directly. The Railway
+service may keep **Auto deploys when pushed to GitHub** enabled, but
+`railway.toml` gates it with:
+
+```toml
+watchPatterns = ["railway-deploy.trigger"]
+```
+
+That means upstream merges, dependency bumps, and experimental branch syncs do
+not deploy production unless `railway-deploy.trigger` changes too.
+
+Production promotion checklist:
+
+1. Apply or verify the Railway Dockerfile patch:
+   `py scripts/apply_railway_docker_patch.py --check Dockerfile`
+2. Run the Railway contract tests:
+   `py -m py_compile scripts\apply_railway_docker_patch.py tests\scripts\test_apply_railway_docker_patch.py`
+3. Update `railway-deploy.trigger` in the promotion commit.
+4. Push the reviewed commit to the branch Railway watches, or deploy explicitly
+   with `railway up --service hermes-agent --environment production`.
+5. Verify `https://hermes-agent-production-cd90.up.railway.app/api/status` and
+   `/` return HTTP 200.
+
+Longer term, the safest construction is a dedicated production branch or an
+image-based Railway service fed by CI after tests pass. The current trigger-file
+gate is the minimal repo-level safety catch for the existing GitHub auto-deploy
+setup.
+
 ## Repository roles
 
 | Repository | Role |
