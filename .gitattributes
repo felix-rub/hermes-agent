@@ -1,2 +1,36 @@
 # Auto-generated files — collapse diffs and exclude from language stats
 web/package-lock.json linguist-generated=true
+
+# --- felix-rub fork: merge protection for Railway deployment files ---
+# Files listed with merge=ours will NOT be overwritten during upstream merges.
+# This protects Railway deployment config from being clobbered by NousResearch
+# upstream changes. The Dockerfile is intentionally NOT listed here because
+# we take upstream's Dockerfile and re-apply our patch via apply_railway_docker_patch.py.
+#
+# IMPORTANT: For this to work, the local git config must define the "ours" merge driver:
+#   git config merge.ours.driver true
+# This is done automatically in the sync workflow.
+
+# Railway-specific deployment config
+railway.toml merge=ours
+railway-deploy.trigger merge=ours
+
+# Fork-specific workflows (upstream won't have these)
+.github/workflows/sync-upstream-railway.yml merge=ours
+.github/workflows/deploy-gate.yml merge=ours
+.github/workflows/rollback.yml merge=ours
+.github/workflows/backup-config.yml merge=ours
+
+# Fork-specific scripts
+scripts/apply_railway_docker_patch.py merge=ours
+scripts/rollback.sh merge=ours
+
+# Fork-specific docs
+docs/felix-rub-railway-sync.md merge=ours
+
+# This file itself
+.gitattributes merge=ours
+
+# Backup service (fork-only s6 service)
+docker/s6-rc.d/backup-config/** merge=ours
+docker/s6-rc.d/user/contents.d/backup-config merge=ours

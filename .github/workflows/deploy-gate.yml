@@ -1,0 +1,102 @@
+name: Deploy Gate — Pre-Railway Validation
+
+# Runs when railway-deploy.trigger is updated (which triggers Railway deploy).
+# This workflow validates the build is healthy BEFORE Railway picks it up.
+# If this workflow fails, you should revert the trigger commit before Railway
+# deploys the broken state.
+
+on:
+  push:
+    branches: [main]
+    paths: ["railway-deploy.trigger"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-gate-main
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Validate Railway Docker contract
+        run: |
+          set -euo pipefail
+          python3 scripts/apply_railway_docker_patch.py --check Dockerfile
+          echo "Railway Docker contract OK"
+
+      - name: Validate railway.toml
+        run: |
+          set -euo pipefail
+          if [ ! -f railway.toml ]; then
+            echo "::error::railway.toml missing!"
+            exit 1
+          fi
+          # Verify watchPatterns still includes the trigger file
+          if ! grep -q 'railway-deploy.trigger' railway.toml; then
+            echo "::error::railway.toml watchPatterns does not include railway-deploy.trigger!"
+            exit 1
+          fi
+          echo "railway.toml valid"
+
+      - name: Docker build
+        run: |
+          set -euo pipefail
+          docker build -t hermes-agent-gate:ci -f Dockerfile . 2>&1 | tail -50
+          echo "Docker build OK"
+
+      - name: Container smoke test
+        run: |
+          set -euo pipefail
+          docker run -d --name hermes-gate-test \
+            -e PORT=9119 \
+            -e HERMES_DASHBOARD=1 \
+            -e HERMES_DASHBOARD_HOST=0.0.0.0 \
+            -e HERMES_DASHBOARD_PORT=9119 \
+            -e HERMES_DASHBOARD_INSECURE=1 \
+            -p 9119:9119 \
+            hermes-agent-gate:ci
+
+          for i in $(seq 1 12); do
+            if curl -sf http://localhost:9119/api/status >/dev/null 2>&1; then
+              echo "Container healthy after $((i * 5))s"
+              break
+            fi
+            if [ "$i" -eq 12 ]; then
+              echo "::error::Container failed healthcheck after 60s"
+              docker logs hermes-gate-test 2>&1 | tail -40
+              docker stop hermes-gate-test && docker rm hermes-gate-test
+              exit 1
+            fi
+            sleep 5
+          done
+
+          # Verify version endpoint returns valid JSON
+          status=$(curl -sf http://localhost:9119/api/status)
+          echo "Status response: $status"
+          docker stop hermes-gate-test && docker rm hermes-gate-test
+
+      - name: Validate s6 services
+        run: |
+          set -euo pipefail
+          # Check all required s6 service definitions exist
+          for svc in main-hermes dashboard backup-config; do
+            if [ ! -f "docker/s6-rc.d/$svc/type" ]; then
+              echo "::error::Missing s6 service: $svc"
+              exit 1
+            fi
+          done
+          # Verify user bundle includes all services
+          for svc in main-hermes dashboard backup-config; do
+            if [ ! -f "docker/s6-rc.d/user/contents.d/$svc" ]; then
+              echo "::error::Service $svc not in user bundle"
+              exit 1
+            fi
+          done
+          echo "s6 service tree valid"

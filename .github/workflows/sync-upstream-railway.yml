@@ -31,6 +31,8 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Enable the "ours" merge driver so .gitattributes merge=ours works
+          git config merge.ours.driver true
 
       - name: Fetch upstream
         run: |
@@ -80,6 +82,44 @@ jobs:
           python3 scripts/apply_railway_docker_patch.py --check Dockerfile
           git diff --check
           git log --oneline --decorate -5
+
+      - name: Docker build smoke test
+        run: |
+          set -euo pipefail
+          echo "Building Docker image to verify upstream merge did not break the build..."
+          docker build -t hermes-agent-sync-test:ci \
+            --build-arg BUILDKIT_INLINE_CACHE=1 \
+            -f Dockerfile . 2>&1 | tail -50
+          echo "Docker build succeeded."
+
+      - name: Container healthcheck
+        run: |
+          set -euo pipefail
+          echo "Running container healthcheck..."
+          docker run -d --name hermes-ci-test \
+            -e PORT=9119 \
+            -e HERMES_DASHBOARD=1 \
+            -e HERMES_DASHBOARD_HOST=0.0.0.0 \
+            -e HERMES_DASHBOARD_PORT=9119 \
+            -e HERMES_DASHBOARD_INSECURE=1 \
+            -p 9119:9119 \
+            hermes-agent-sync-test:ci
+
+          # Wait for container to start (max 60s)
+          for i in $(seq 1 12); do
+            if curl -sf http://localhost:9119/api/status >/dev/null 2>&1; then
+              echo "Healthcheck passed after $((i * 5))s"
+              break
+            fi
+            if [ "$i" -eq 12 ]; then
+              echo "::error::Container failed healthcheck after 60s"
+              docker logs hermes-ci-test 2>&1 | tail -30
+              docker stop hermes-ci-test && docker rm hermes-ci-test
+              exit 1
+            fi
+            sleep 5
+          done
+          docker stop hermes-ci-test && docker rm hermes-ci-test
 
       - name: Push updated main
         run: |

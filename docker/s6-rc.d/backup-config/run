@@ -1,0 +1,66 @@
+#!/command/with-contenv sh
+# shellcheck shell=sh
+# Periodic config backup service.
+# Creates timestamped snapshots of critical state files every hour.
+# Backups are stored on the same persistent volume under .backups/
+# so they survive redeploys. Keeps the last 48 snapshots (2 days).
+
+set -eu
+
+HERMES_HOME="${HERMES_HOME:-/opt/data}"
+BACKUP_DIR="$HERMES_HOME/.backups"
+INTERVAL="${BACKUP_INTERVAL_SECONDS:-3600}"
+MAX_SNAPSHOTS="${BACKUP_MAX_SNAPSHOTS:-48}"
+
+# Critical files to back up (relative to HERMES_HOME)
+STATE_FILES="
+auth.json
+.env
+config.yaml
+state.db
+hermes_state.db
+response_store.db
+gateway_state.json
+processes.json
+active_profile
+SOUL.md
+"
+
+# Wait for initial startup to settle
+sleep 30
+
+while true; do
+    ts=$(date -u +%Y%m%dT%H%M%SZ)
+    snap_dir="$BACKUP_DIR/$ts"
+    mkdir -p "$snap_dir"
+
+    count=0
+    for f in $STATE_FILES; do
+        src="$HERMES_HOME/$f"
+        if [ -f "$src" ]; then
+            cp -p "$src" "$snap_dir/" 2>/dev/null && count=$((count + 1))
+        fi
+    done
+
+    # Back up skills, memories, and hooks directories (shallow tar)
+    for dir in skills memories hooks cron skins plans; do
+        if [ -d "$HERMES_HOME/$dir" ] && [ "$(ls -A "$HERMES_HOME/$dir" 2>/dev/null)" ]; then
+            tar -cf "$snap_dir/${dir}.tar" -C "$HERMES_HOME" "$dir" 2>/dev/null || true
+        fi
+    done
+
+    # Write manifest
+    printf '%s snapshot: %d files backed up\n' "$ts" "$count" > "$snap_dir/.manifest"
+
+    # Prune old snapshots (keep newest MAX_SNAPSHOTS)
+    snap_count=$(ls -1d "$BACKUP_DIR"/2* 2>/dev/null | wc -l)
+    if [ "$snap_count" -gt "$MAX_SNAPSHOTS" ]; then
+        prune_count=$((snap_count - MAX_SNAPSHOTS))
+        ls -1d "$BACKUP_DIR"/2* 2>/dev/null | head -n "$prune_count" | while read -r old; do
+            rm -rf "$old"
+        done
+    fi
+
+    echo "[backup] Snapshot $ts complete ($count state files)"
+    sleep "$INTERVAL"
+done

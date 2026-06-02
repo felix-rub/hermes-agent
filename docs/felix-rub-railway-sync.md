@@ -186,3 +186,109 @@ contract is expressed as a small, repeatable patch.
 - Do not replace upstream Docker architecture wholesale; patch only the Railway
    deployment contract: no Docker `VOLUME`, s6 dashboard on `9119`, foreground
    dashboard on `$PORT`.
+
+---
+
+## Persistent Volume & Data Resilience
+
+### Volume
+
+Railway volumes cannot be declared in `railway.toml` — they are managed via CLI:
+
+```bash
+railway volume add --mount-path /opt/data
+railway volume list
+```
+
+Current setup:
+- Volume name: `hermes-agent-volume`
+- Mount path: `/opt/data` (= `$HERMES_HOME`)
+- Size limit: 50 GB
+
+### Volume Sentinel
+
+`docker/stage2-hook.sh` contains an early-boot sentinel that compares the device
+ID of `/` and `$HERMES_HOME`. If they share the same device, the volume is NOT
+mounted (ephemeral) and a CRITICAL warning is emitted. This prevents silent data
+loss after misconfigurations.
+
+### Hourly Backup (s6 service)
+
+`docker/s6-rc.d/backup-config/` is a `longrun` s6 service that:
+
+- Runs every hour (configurable via `BACKUP_INTERVAL_SECONDS`)
+- Tars critical directories (skills, memories, hooks, cron, skins, plans)
+- Stores snapshots in `/opt/data/.backups/TIMESTAMP/`
+- Retains the last 48 snapshots (configurable via `BACKUP_MAX_SNAPSHOTS`)
+- Writes a `.manifest` file per snapshot listing all archived paths
+
+### Companion Repo Backup
+
+`.github/workflows/backup-config.yml` pushes deployment configuration snapshots
+to `Fefe-GmbH/Hermes-Agent` (private) on every deploy trigger change and daily.
+Requires the `COMPANION_DEPLOY_KEY` secret (SSH deploy key with write access).
+
+---
+
+## Merge Protection
+
+`.gitattributes` declares `merge=ours` for all fork-specific files. This
+prevents upstream merges from overwriting Railway deployment config. The sync
+workflow sets `git config merge.ours.driver true` before merging.
+
+Protected files: `railway.toml`, `railway-deploy.trigger`, fork-only workflows,
+fork-only scripts, `docs/felix-rub-railway-sync.md`, `.gitattributes`,
+`docker/s6-rc.d/backup-config/**`.
+
+---
+
+## Deploy Gate
+
+`.github/workflows/deploy-gate.yml` runs on every push to `main` when
+`railway-deploy.trigger` changes. It validates:
+
+1. Railway Docker contract (via `apply_railway_docker_patch.py --check`)
+2. `railway.toml` has correct `watchPatterns`
+3. Docker build succeeds
+4. Container passes healthcheck (HTTP 200 on `/api/status` within 60s)
+5. All s6 service definitions are well-formed and registered
+
+If any step fails, the commit is flagged — preventing broken deploys.
+
+---
+
+## Rollback
+
+Two rollback mechanisms are available:
+
+### 1. Local script: `scripts/rollback.sh`
+
+```bash
+./scripts/rollback.sh [commit-sha]
+```
+
+- Creates backup tag, reverts main to target, prints push instructions
+- If no SHA given, auto-detects previous deploy
+
+### 2. GitHub Actions: `.github/workflows/rollback.yml`
+
+- Manual dispatch from GitHub Actions UI
+- Specify target commit or let it auto-detect
+- Creates backup tag, reverts, touches deploy trigger, pushes — all automated
+
+---
+
+## Complete Automation Inventory
+
+| File | Purpose |
+| --- | --- |
+| `.github/workflows/sync-upstream-railway.yml` | Daily upstream merge + Docker build gate |
+| `.github/workflows/deploy-gate.yml` | Pre-deploy validation on trigger change |
+| `.github/workflows/rollback.yml` | One-click rollback via GitHub UI |
+| `.github/workflows/backup-config.yml` | Config snapshots to private companion repo |
+| `scripts/apply_railway_docker_patch.py` | Reconcile Dockerfile after upstream merge |
+| `scripts/rollback.sh` | Local CLI rollback tool |
+| `docker/s6-rc.d/backup-config/` | Hourly in-container backup service |
+| `railway.toml` | Railway build/deploy config |
+| `railway-deploy.trigger` | Deploy gate file |
+| `.gitattributes` | Merge protection for fork-specific files |

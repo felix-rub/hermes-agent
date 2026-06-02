@@ -1,0 +1,103 @@
+name: Backup Config Snapshot
+
+# Creates a snapshot of the current deployment configuration and pushes it
+# to the private companion repository (Fefe-GmbH/Hermes-Agent) as a backup.
+# This runs on every deploy trigger change (i.e., every deployment) and daily.
+#
+# Requires:
+#   - COMPANION_DEPLOY_KEY secret: SSH deploy key with write access to Fefe-GmbH/Hermes-Agent
+
+on:
+  push:
+    branches: [main]
+    paths: ["railway-deploy.trigger"]
+  schedule:
+    - cron: "0 6 * * *"  # Daily at 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backup:
+    if: github.repository == 'felix-rub/hermes-agent'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Collect deployment snapshot
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/backup-snapshot
+
+          # Deployment-critical files
+          cp railway.toml /tmp/backup-snapshot/
+          cp railway-deploy.trigger /tmp/backup-snapshot/
+          cp Dockerfile /tmp/backup-snapshot/
+          cp docker/stage2-hook.sh /tmp/backup-snapshot/
+          cp scripts/apply_railway_docker_patch.py /tmp/backup-snapshot/
+
+          # Version info
+          git log --oneline -1 > /tmp/backup-snapshot/VERSION.txt
+          git rev-parse HEAD >> /tmp/backup-snapshot/VERSION.txt
+          date -u >> /tmp/backup-snapshot/VERSION.txt
+
+          # s6 service definitions
+          tar -cf /tmp/backup-snapshot/s6-services.tar docker/s6-rc.d/
+
+          echo "Snapshot contents:"
+          ls -la /tmp/backup-snapshot/
+
+      - name: Push to companion repo
+        env:
+          SSH_KEY: ${{ secrets.COMPANION_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${SSH_KEY:-}" ]; then
+            echo "::warning::COMPANION_DEPLOY_KEY not configured. Skipping backup push."
+            echo "To enable: add an SSH deploy key for Fefe-GmbH/Hermes-Agent as a secret."
+            exit 0
+          fi
+
+          # Set up SSH
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
+
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes"
+
+          # Clone companion repo
+          git clone --depth 1 git@github.com:Fefe-GmbH/Hermes-Agent.git /tmp/companion
+
+          # Update backup directory
+          mkdir -p /tmp/companion/backups/deploy-snapshots
+          ts=$(date -u +%Y%m%dT%H%M%SZ)
+          cp -r /tmp/backup-snapshot /tmp/companion/backups/deploy-snapshots/"$ts"
+
+          # Keep only last 30 snapshots
+          cd /tmp/companion/backups/deploy-snapshots
+          snap_count=$(ls -1d 2* 2>/dev/null | wc -l)
+          if [ "$snap_count" -gt 30 ]; then
+            prune=$((snap_count - 30))
+            ls -1d 2* | head -n "$prune" | xargs rm -rf
+          fi
+
+          # Commit and push
+          cd /tmp/companion
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes to backup."
+          else
+            git commit -m "backup: deploy snapshot $ts from felix-rub/hermes-agent"
+            git push origin main
+            echo "Backup pushed: $ts"
+          fi
+
+          # Cleanup
+          rm -f ~/.ssh/deploy_key

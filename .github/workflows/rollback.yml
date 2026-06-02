@@ -1,0 +1,88 @@
+name: Rollback Deploy
+
+# Manual workflow to roll back to a previous known-good state.
+# Reverts main to the specified commit and touches the deploy trigger
+# so Railway picks up the rollback.
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_commit:
+        description: "Commit SHA to roll back to (leave empty for previous deploy)"
+        required: false
+        type: string
+      reason:
+        description: "Reason for rollback"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: deploy-rollback-main
+  cancel-in-progress: false
+
+jobs:
+  rollback:
+    if: github.repository == 'felix-rub/hermes-agent'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout fork main
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Determine rollback target
+        id: target
+        run: |
+          set -euo pipefail
+          TARGET="${{ github.event.inputs.target_commit }}"
+          if [ -z "$TARGET" ]; then
+            # Find the commit before the last railway-deploy.trigger change
+            TARGET=$(git log --format='%H' --follow -- railway-deploy.trigger | sed -n '2p')
+            if [ -z "$TARGET" ]; then
+              echo "::error::Could not find a previous deploy commit."
+              exit 1
+            fi
+            echo "Auto-detected previous deploy: $TARGET"
+          fi
+          git cat-file -e "$TARGET" || { echo "::error::Commit $TARGET not found"; exit 1; }
+          echo "sha=$TARGET" >> "$GITHUB_OUTPUT"
+          echo "short=$(git rev-parse --short $TARGET)" >> "$GITHUB_OUTPUT"
+
+      - name: Create rollback
+        run: |
+          set -euo pipefail
+          TARGET="${{ steps.target.outputs.sha }}"
+          TARGET_SHORT="${{ steps.target.outputs.short }}"
+          CURRENT_SHORT=$(git rev-parse --short HEAD)
+
+          # Tag current state for recovery
+          backup_tag="pre-rollback-$(date -u +%Y%m%dT%H%M%SZ)"
+          git tag "$backup_tag" HEAD
+          git push origin "$backup_tag"
+
+          # Revert to target
+          git revert --no-commit HEAD..."$TARGET"
+
+          # Touch deploy trigger to ensure Railway picks it up
+          date -u +%Y%m%dT%H%M%SZ > railway-deploy.trigger
+          git add -A
+
+          git commit -m "rollback: revert to $TARGET_SHORT
+
+          Reason: ${{ github.event.inputs.reason }}
+          Automated rollback from $CURRENT_SHORT to $TARGET_SHORT.
+          Previous state preserved in tag: $backup_tag
+          Triggered by: ${{ github.actor }}
+          "
+
+      - name: Push rollback
+        run: git push origin HEAD:main

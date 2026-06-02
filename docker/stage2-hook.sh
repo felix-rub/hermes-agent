@@ -35,6 +35,26 @@ as_hermes() { [ "$(id -u)" = 0 ] || { "$@"; return; }; s6-setuidgid hermes "$@";
 # is a no-op if the dir already exists. (#18482, salvages #18488)
 mkdir -p "$HERMES_HOME"
 
+# --- Persistent volume sentinel ---
+# Detect whether $HERMES_HOME is backed by a persistent volume or sits on the
+# ephemeral root filesystem. On Railway (and most container platforms) the root
+# FS is discarded on every deploy — without a volume mount at $HERMES_HOME all
+# user data (configs, sessions, auth, skills) is irrecoverably lost.
+# Compare device IDs: if $HERMES_HOME lives on the same device as / it is NOT
+# a separate mount and therefore ephemeral.
+if [ "$(stat -c %d /)" = "$(stat -c %d "$HERMES_HOME")" ]; then
+    echo "============================================================" >&2
+    echo "[CRITICAL] $HERMES_HOME is NOT on a persistent volume!" >&2
+    echo "[CRITICAL] All data will be LOST on next deploy/restart!" >&2
+    echo "[CRITICAL] Add a persistent volume mounted at $HERMES_HOME." >&2
+    echo "============================================================" >&2
+    # Write sentinel file so monitoring can detect this state
+    printf 'EPHEMERAL — no persistent volume at %s\n' "$HERMES_HOME" \
+        > "$HERMES_HOME/.volume_warning" 2>/dev/null || true
+else
+    rm -f "$HERMES_HOME/.volume_warning" 2>/dev/null || true
+fi
+
 # Numeric UID/GID validation: must be digits only, 1000-65534
 validate_uid_gid() {
     case "$1" in
